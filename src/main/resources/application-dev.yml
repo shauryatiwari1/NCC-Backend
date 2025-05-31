@@ -1,0 +1,36 @@
+spring:
+  # PostgreSQL Database Configuration for Development
+  datasource:
+    url: ${JDBC_DATABASE_URL}
+    username: ${JDBC_DATABASE_USERNAME}
+    password: ${JDBC_DATABASE_PASSWORD}
+    hikari:
+      connection-timeout: 60000 # 60 seconds
+      maximum-pool-size: 5
+      connection-test-query: SELECT 1
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+    show-sql: true
+
+# Development-specific settings
+logging:
+  level:
+    root: INFO
+    com.shauryaORG.NoCheatCode: DEBUG
+    org.hibernate.SQL: DEBUG
+
+# AI Helper Configuration
+ai:
+  gemini:
+    api:
+      url: https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent
+      key: ${AI_GEMINI_API_KEY}
+# Judge0 Configuration
+judge0:
+  api:
+    key: ${JUDGE0_API_KEY}

@@ -12,6 +12,13 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.http.*;
+import com.shauryaORG.NoCheatCode.model.Submission;
+import com.shauryaORG.NoCheatCode.model.User;
+import com.shauryaORG.NoCheatCode.repository.SubmissionRepository;
+import com.shauryaORG.NoCheatCode.repository.UserRepository;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
+import java.time.LocalDateTime;
 
 import java.util.*;
 
@@ -19,6 +26,14 @@ import java.util.*;
 public class SubmissionService {
     @Autowired
     private ProblemRepository problemRepository;
+    @Autowired
+    private UserRepository userRepository;
+
+    @Autowired
+    private SubmissionRepository submissionRepository;
+
+    @Autowired
+    private CodePatternExtractor codePatternExtractor;
 
     private static final String JUDGE0_URL = "https://judge0-ce.p.rapidapi.com/submissions?base64_encoded=false&wait=true";
     @Value("${judge0.api.key}")
@@ -31,6 +46,15 @@ public class SubmissionService {
     );
 
     public SubmissionResponseDto handleSubmission(SubmissionRequestDto requestDto) {
+        // Get current authenticated user
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        String username = authentication.getName();
+        User user = userRepository.findByUsername(username).orElse(null);
+
+        if (user == null) {
+            return new SubmissionResponseDto("FAILED", "User not found", null);
+        }
+
         Optional<Problem> problemOpt = problemRepository.findById(requestDto.getProblemId());
         if (problemOpt.isEmpty()) {
             return new SubmissionResponseDto("FAILED", "Problem not found", null);
@@ -52,6 +76,21 @@ public class SubmissionService {
         }
         String status = allPassed ? "ACCEPTED" : "FAILED";
         String message = allPassed ? "All test cases passed!" : "Some test cases failed.";
+
+        // Extract code patterns before saving submission
+        String codePatterns = codePatternExtractor.extractCodePatterns(requestDto.getCode(), requestDto.getLanguage());
+
+        // Save the submission to database with code patterns
+        Submission submission = Submission.builder()
+                .user(user)
+                .problem(problem)
+                .code(requestDto.getCode())
+                .codePatterns(codePatterns)  // Store extracted patterns
+                .solved(allPassed)
+                .submittedAt(LocalDateTime.now())
+                .build();
+
+        submissionRepository.save(submission);
         return new SubmissionResponseDto(status, message, testResults);
     }
 
@@ -93,13 +132,3 @@ public class SubmissionService {
         return result;
     }
 }
-
-
-
-
-
-
-
-
-
-

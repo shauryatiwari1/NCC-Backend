@@ -11,13 +11,23 @@ import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
-
+import com.shauryaORG.NoCheatCode.service.UserProblemService;
 import java.util.*;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
+import com.shauryaORG.NoCheatCode.model.User;
+import com.shauryaORG.NoCheatCode.repository.UserRepository;
 
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class AiHelperService {
+    @Autowired
+    private UserProblemService userProblemService;
+
+    @Autowired
+    private UserRepository userRepository;
 
     private final RestTemplate restTemplate;
     private final AiHelperConfig aiHelperConfig;
@@ -80,26 +90,12 @@ public class AiHelperService {
         try {
             log.info("Calling Gemini API with prompt length: {}", prompt.length());
 
-
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
 
             String url = aiHelperConfig.getGeminiApiUrl() + "?key=" + aiHelperConfig.getGeminiApiKey();
 
-
-            Map<String, Object> requestBody = new HashMap<>();
-            List<Map<String, Object>> contents = new ArrayList<>();
-            Map<String, Object> content = new HashMap<>();
-            List<Map<String, Object>> parts = new ArrayList<>();
-            Map<String, Object> part = new HashMap<>();
-
-            part.put("text", prompt);
-            parts.add(part);
-            content.put("parts", parts);
-            contents.add(content);
-            requestBody.put("contents", contents);
-
-
+            Map<String, Object> requestBody = buildApiRequestBody(prompt);
             HttpEntity<Map<String, Object>> entity = new HttpEntity<>(requestBody, headers);
 
             log.info("Sending request to Gemini API");
@@ -133,11 +129,26 @@ public class AiHelperService {
         }
     }
 
+    private Map<String, Object> buildApiRequestBody(String prompt) {
+        Map<String, Object> requestBody = new HashMap<>();
+        List<Map<String, Object>> contents = new ArrayList<>();
+        Map<String, Object> content = new HashMap<>();
+        List<Map<String, Object>> parts = new ArrayList<>();
+        Map<String, Object> part = new HashMap<>();
+
+        part.put("text", prompt);
+        parts.add(part);
+        content.put("parts", parts);
+        contents.add(content);
+        requestBody.put("contents", contents);
+
+        return requestBody;
+    }
+
     private AiResponse parseGeminiResponse(String responseBody) {
         try {
             log.info("Parsing Gemini API response");
             JsonNode root = objectMapper.readTree(responseBody);
-
 
             if (root.has("error")) {
                 String message = root.path("error").path("message").asText("Unknown API error");
@@ -147,7 +158,6 @@ public class AiHelperService {
                         .error(true)
                         .build();
             }
-
 
             JsonNode candidates = root.path("candidates");
             if (candidates.isEmpty() || candidates.size() == 0) {
@@ -194,46 +204,166 @@ public class AiHelperService {
 
     private String buildHintPrompt(HintRequest request) {
         int level = request.getHintLevel() != null ? request.getHintLevel() : 1;
+        String levelDescription = getHintLevelDescription(level);
 
-        String levelDescription;
+        StringBuilder prompt = new StringBuilder();
+        prompt.append("Problem: \"").append(request.getProblemTitle()).append("\"\n\n")
+                .append("Problem Description:\n")
+                .append(request.getProblemDescription() != null ? request.getProblemDescription() : "No description provided")
+                .append("\n\n")
+                .append("Current Code:\n```\n")
+                .append(request.getCode() != null ? request.getCode() : "No code written yet")
+                .append("\n```\n\n");
+
+        addUserContext(prompt, request);
+
+        prompt.append("Provide Hint Level ").append(level).append(":\n")
+                .append(levelDescription).append("\n\n")
+                .append("RULES:\n")
+                .append("- Focus ONLY on this specific programming problem\n")
+                .append("- Do not mention yourself, this platform, environment, or anything unrelated to the problem\n")
+                .append("- Provide only programming guidance relevant to solving this problem\n")
+                .append("- Keep response concise and educational\n")
+                .append("- Do not provide complete solutions");
+
+        return prompt.toString();
+    }
+
+    private String getHintLevelDescription(int level) {
         switch (level) {
             case 1:
-                levelDescription = "Give a high-level idea of how to solve the problem without revealing the solution.";
-                break;
+                return "Give a high-level approach to solve the problem without revealing the solution.";
             case 2:
-                levelDescription = "Explain the algorithm or approach in more detail, but still without giving actual code.";
-                break;
+                return "Explain the algorithm or approach in more detail, but still without giving actual code.";
             case 3:
-                levelDescription = "Give a specific implementation tip or point out what might be missing, but avoid writing the complete solution.";
-                break;
+                return "Give a specific implementation tip or point out what might be missing, but avoid writing the complete solution.";
             default:
-                levelDescription = "Give a high-level idea of how to solve the problem without revealing the solution.";
+                return "Give a high-level approach to solve the problem without revealing the solution.";
         }
-
-        return "You are a helpful programming assistant. The user is solving a problem: \"" + request.getProblemTitle() + "\".\n\n" +
-               "Problem Description: " + (request.getProblemDescription() != null ? request.getProblemDescription() : "No description provided") + "\n\n" +
-               "Their current code is:\n\n```\n" + (request.getCode() != null ? request.getCode() : "No code written yet") + "\n```\n\n" +
-               "Provide Hint Level " + level + ":\n" + levelDescription + "\n\n" +
-               "Keep the hint concise and educational.";
     }
 
     private String buildAnalysisPrompt(HintRequest request) {
-        return "Analyze this code for the problem: \"" + request.getProblemTitle() + "\"\n\n" +
-               "Problem Description: " + (request.getProblemDescription() != null ? request.getProblemDescription() : "No description provided") + "\n\n" +
-               "Code to analyze:\n```\n" + (request.getCode() != null ? request.getCode() : "No code written yet") + "\n```\n\n" +
-               "Please provide:\n" +
-               "1. What the code is doing correctly\n" +
-               "2. Any bugs or issues you spot\n" +
-               "3. Suggestions for improvement (don't write the full solution)\n" +
-               "4. Whether it solves the problem correctly\n\n" +
-               "Keep the analysis clear and helpful.";
+        StringBuilder prompt = new StringBuilder();
+        prompt.append("Problem: \"").append(request.getProblemTitle()).append("\"\n\n")
+                .append("Problem Description:\n")
+                .append(request.getProblemDescription() != null ? request.getProblemDescription() : "No description provided")
+                .append("\n\n")
+                .append("Code to Analyze:\n```\n")
+                .append(request.getCode() != null ? request.getCode() : "No code written yet")
+                .append("\n```\n\n");
+
+        addUserContext(prompt, request);
+        addPreviousSolutionContext(prompt, request);
+
+        prompt.append("Analyze and provide:\n")
+                .append("1. What the code does correctly\n")
+                .append("2. Bugs or issues found\n")
+                .append("3. Improvement suggestions (no complete solutions)\n")
+                .append("4. Whether it solves the problem correctly\n")
+                .append("5. Comparison to common algorithmic patterns\n\n")
+                .append("RULES:\n")
+                .append("- Focus ONLY on this specific programming problem and code\n")
+                .append("- Do not mention yourself, platforms, environments, or unrelated topics\n")
+                .append("- Provide only technical programming analysis\n")
+                .append("- Keep response focused and educational");
+
+        return prompt.toString();
     }
 
     private String buildChatPrompt(HintRequest request) {
-        return "You are a helpful programming assistant. The user is working on: \"" + request.getProblemTitle() + "\"\n\n" +
-               "Problem Description: " + (request.getProblemDescription() != null ? request.getProblemDescription() : "No description provided") + "\n\n" +
-               "Current code:\n```\n" + (request.getCode() != null ? request.getCode() : "No code written yet") + "\n```\n\n" +
-               "User question: " + request.getUserMessage() + "\n\n" +
-               "Please provide a helpful response related to their coding problem but don't give them full code in any case, also don't talk tell any details including you, the project or anything irrelevant to the problem, you may talk about coding.";
+        StringBuilder prompt = new StringBuilder();
+        prompt.append("Problem: \"").append(request.getProblemTitle()).append("\"\n\n")
+                .append("Problem Description:\n")
+                .append(request.getProblemDescription() != null ? request.getProblemDescription() : "No description provided")
+                .append("\n\n")
+                .append("Current Code:\n```\n")
+                .append(request.getCode() != null ? request.getCode() : "No code written yet")
+                .append("\n```\n\n");
+
+        addUserContext(prompt, request);
+
+        // Check if user is asking about their coding patterns or history
+        boolean askingAboutPatterns = isAskingAboutCodingPatterns(request.getUserMessage());
+
+        if (askingAboutPatterns) {
+            addCodingPatternsContext(prompt, request);
+        }
+
+        prompt.append("User Question: ").append(request.getUserMessage()).append("\n\n");
+
+        if (askingAboutPatterns) {
+            prompt.append("The user is asking about their coding patterns. ")
+                    .append("Analyze the patterns shown above and provide specific technical advice for this problem based on their coding history.\n\n");
+        }
+
+        prompt.append("STRICT RULES:\n")
+                .append("- Answer ONLY about this programming problem and related coding concepts\n")
+                .append("- Do not mention yourself, AI assistants, platforms, environments, or users\n")
+                .append("- Do not discuss anything unrelated to programming or this specific problem\n")
+                .append("- Focus solely on technical programming guidance\n")
+                .append("- Do not provide complete code solutions\n")
+                .append("- Keep responses focused on problem-solving and learning");
+
+        return prompt.toString();
+    }
+
+    private boolean isAskingAboutCodingPatterns(String userMessage) {
+        if (userMessage == null) return false;
+
+        String message = userMessage.toLowerCase();
+        String[] patternKeywords = {
+                "pattern", "history", "submission", "previous", "before",
+                "style", "approach", "common", "usually", "typically",
+                "habit", "way i", "how i", "my code", "my solution"
+        };
+
+        return Arrays.stream(patternKeywords)
+                .anyMatch(keyword -> message.contains(keyword));
+    }
+
+    private void addCodingPatternsContext(StringBuilder prompt, HintRequest request) {
+        User user = getCurrentUser();
+        if (user == null) return;
+
+        String patternSummary = sanitizePattern(userProblemService.getUserCodingPatternSummary(user));
+        if (patternSummary != null && !patternSummary.isEmpty() && !patternSummary.equals("No coding patterns available")) {
+            prompt.append("User's Common Coding Patterns Across Problems:\n")
+                    .append(patternSummary).append("\n\n");
+        }
+    }
+
+    private void addUserContext(StringBuilder prompt, HintRequest request) {
+        User user = getCurrentUser();
+        if (user == null || request.getProblemId() == null) return;
+
+        int solvedCount = userProblemService.getUserSolvedProblemsCount(user);
+        if (solvedCount > 0) {
+            prompt.append("Context: User has solved ").append(solvedCount).append(" problems previously.\n\n");
+        }
+    }
+
+    private void addPreviousSolutionContext(StringBuilder prompt, HintRequest request) {
+        User user = getCurrentUser();
+        if (user == null || request.getProblemId() == null) return;
+
+        boolean hasSolvedBefore = userProblemService.hasUserSolvedProblem(user, request.getProblemId());
+        if (hasSolvedBefore) {
+            String previousPatterns = sanitizePattern(userProblemService.getLatestCodePatternsForProblem(user, request.getProblemId()));
+            if (previousPatterns != null && !previousPatterns.isEmpty()) {
+                prompt.append("Note: User has solved this problem before using these patterns: ")
+                        .append(previousPatterns).append("\n\n");
+            }
+        }
+    }
+
+    private User getCurrentUser() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        String username = authentication != null ? authentication.getName() : null;
+        return username != null ? userRepository.findByUsername(username).orElse(null) : null;
+    }
+
+    private String sanitizePattern(String pattern) {
+        if (pattern == null) return "";
+        return pattern.replace("\0", "").replace("\r", "").trim();
     }
 }

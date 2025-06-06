@@ -16,4 +16,5 @@ public class HintRequest {
     private Integer hintLevel; // 1, 2, 3, or null for analyze
     private String userMessage; // For chat functionality
     private Boolean isAnalyzeRequest; // To differentiate between hint and analyze requests
+    private Long problemId;
 }

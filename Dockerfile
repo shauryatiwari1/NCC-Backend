@@ -1,15 +1,22 @@
-# Use an official OpenJDK runtime as a parent image
-FROM openjdk:17-jdk-slim
+# -------- Stage 1: Build with Maven --------
+FROM maven:3.9.6-eclipse-temurin-17 AS builder
 
-# Set the working directory
 WORKDIR /app
 
-# Copy the built jar file
-COPY target/NoCheatCode-0.0.1-SNAPSHOT.jar app.jar
+# Copy everything and build the jar
+COPY . .
+RUN mvn clean package -DskipTests
 
-# Expose the port the app runs on
+# -------- Stage 2: Run with slim JDK --------
+FROM openjdk:17-jdk-slim
+
+WORKDIR /app
+
+# Copy only the built JAR from the builder stage
+COPY --from=builder /app/target/*.jar app.jar
+
+# Expose app port
 EXPOSE 8080
 
-# Run the jar file
+# Run the Spring Boot app
 ENTRYPOINT ["java", "-jar", "app.jar"]
-
